@@ -2,42 +2,58 @@ name: CI
 
 on:
   push:
-    branches:
-      - master
+    branches: [ main, master ]
   pull_request:
 
 permissions:
-  actions: read
   contents: read
 
 jobs:
-  main:
+  build-test:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
         with:
-          filter: tree:0
           fetch-depth: 0
+          filter: tree:0
 
-      # This enables task distribution via Nx Cloud
-      # Run this command as early as possible, before dependencies are installed
-      # Learn more at https://nx.dev/ci/reference/nx-cloud-cli#npx-nxcloud-startcirun
-      # Uncomment this line to enable task distribution
-      # - run: npx nx start-ci-run --distribute-on="3 linux-medium-js" --stop-agents-after="e2e-ci"
-
-      # Cache node_modules
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: 'npm'
 
-      - run: npm ci --legacy-peer-deps
-      - run: npx cypress install
+      - name: Install deps
+        run: npm ci
 
-      # Prepend any command with "nx-cloud record --" to record its logs to Nx Cloud
-      # - run: npx nx-cloud record -- echo Hello World
-      # When you enable task distribution, run the e2e-ci task instead of e2e
-      - run: npx nx run-many -t lint test build e2e
-      # Nx Cloud recommends fixes for failures to help you get CI green faster. Learn more: https://nx.dev/ci/features/self-healing-ci
-      - run: npx nx fix-ci
+      - name: Cache Nx
+        uses: actions/cache@v4
+        with:
+          path: .nx/cache
+          key: nx-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/project.json', '**/nx.json') }}
+          restore-keys: |
+            nx-${{ runner.os }}-
+
+      # Lint / Test / Build only what changed
+      - name: Lint (affected)
+        run: npx nx affected -t lint --parallel=3
+
+      - name: Unit tests (affected)
+        run: npx nx affected -t test --ci --code-coverage --parallel=3
+
+      - name: Build (affected, prod)
+        run: npx nx affected -t build --configuration=production --parallel=3
+
+      # E2E for shell only (adjust if you have multiple e2e projects)
+      - name: E2E (shell)
+        run: npx nx e2e shell-e2e --ci
+        # If you generated e2e for remotes too, add extra steps or use affected -t e2e
+
+      # Optional: upload dist artifacts for changed apps
+      - name: Upload build artifacts
         if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
